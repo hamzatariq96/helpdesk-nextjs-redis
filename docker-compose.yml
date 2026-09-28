@@ -1,0 +1,72 @@
+x-app-env: &app-env
+  DATABASE_URL: postgres://app:app@db:5432/helpdesk
+  REDIS_URL: redis://redis:6379/0
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: helpdesk
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d helpdesk"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Runs once: applies migrations and loads demo data, then exits.
+  setup:
+    build:
+      context: .
+      target: dev
+    command: ["sh", "-c", "npm run db:migrate && npm run db:seed"]
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      target: runner
+    environment:
+      <<: *app-env
+      INSECURE_COOKIES: "1" # plain http on localhost
+    ports:
+      - "3000:3000"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  # docker compose --profile test run --rm tests
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: dev
+    command: ["npm", "test"]
+    environment:
+      TEST_DATABASE_URL: postgres://app:app@db:5432/helpdesk_test
+      TEST_REDIS_URL: redis://redis:6379/15
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
